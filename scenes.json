@@ -1,0 +1,13 @@
+{
+  "scenes": [
+    {
+      "id": "computer-lab",
+      "kind": "real",
+      "title": "Computer Lab — real smartphone capture",
+      "subtitle": "9.6 s handheld phone video · 95 of 136 frames registered · fully automatic",
+      "provenance": "Reconstructed automatically from a single 9.6-second handheld smartphone video (1024×576, WhatsApp-compressed) recorded on 2 Nov 2026. No manual modelling or editing: every surface comes from photogrammetry. The clip mostly pans from one standing position, so surfaces facing the camera (desk rows, notice board, whiteboard, far wall) are reconstructed while areas never seen by the phone are missing.",
+      "dir": "assets/computer-lab/",
+      "splat": false
+    }
+  ]
+}
