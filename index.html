@@ -66,7 +66,7 @@
   <table id="stats"></table>
   <h3>Pipeline (open-source, CPU-only)</h3>
   <ol class="pipe">
-    <li><b>Capture</b> – handheld smartphone video, walking loops around the room.</li>
+    <li><b>Capture</b> – one ordinary handheld smartphone video (no LiDAR, depth sensor or IMU data used).</li>
     <li><b>Frame selection</b> – ffmpeg <code>blurdetect</code>; sharpest frame per window kept.</li>
     <li><b>Structure-from-Motion</b> – COLMAP 4.2: SIFT features, sequential + loop-closure matching, incremental mapping → camera poses + sparse cloud.</li>
     <li><b>Gravity alignment</b> – COLMAP orientation aligner (upright-camera prior).</li>
