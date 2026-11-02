@@ -7,7 +7,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { NodeIO } from '@gltf-transform/core';
 import { EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
-import { weld, quantize, reorder, meshopt, dedup, prune } from '@gltf-transform/functions';
+import { weld, quantize, reorder, meshopt, dedup, prune, unpartition } from '@gltf-transform/functions';
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 
 const [inFile, outFile, ffmpeg, maxTexArg, qArg] = process.argv.slice(2);
@@ -31,6 +31,6 @@ doc.getRoot().listTextures().forEach((tex, i) => {
   console.log(`texture ${i}: ${(before / 1048576).toFixed(2)} MB -> ${(tex.getImage().byteLength / 1048576).toFixed(2)} MB`);
 });
 
-await doc.transform(dedup(), weld(), reorder({ encoder: MeshoptEncoder }), quantize(), meshopt({ encoder: MeshoptEncoder, level: 'medium' }), prune());
+await doc.transform(dedup(), weld(), reorder({ encoder: MeshoptEncoder }), quantize(), meshopt({ encoder: MeshoptEncoder, level: 'medium' }), prune(), unpartition()); // GLB allows one buffer (OpenMVS writes one per atlas)
 await io.write(outFile, doc);
 console.log(`glb: ${(fs.statSync(inFile).size / 1048576).toFixed(2)} MB (+external textures) -> ${(fs.statSync(outFile).size / 1048576).toFixed(2)} MB`);

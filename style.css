@@ -109,3 +109,40 @@ button.tog.on { border-color: var(--accent); color: var(--accent); }
   #updown { right: 16px; bottom: calc(114px + env(safe-area-inset-bottom)); }
   #info { top: 8px; right: 8px; bottom: calc(100px + env(safe-area-inset-bottom)); }
 }
+
+/* ---------- NammaSpace v2: branding, stage layers, minimap, input overlay ---------- */
+.brand { display: flex; align-items: center; gap: 7px; font-size: 13px; letter-spacing: .14em; }
+.brand .logo { width: 17px; height: 17px; color: var(--accent); flex: none; }
+.brand-tag { color: var(--muted); font-weight: 600; letter-spacing: .06em; font-size: 10.5px; padding-left: 8px; border-left: 1px solid var(--line); }
+.load-card .brand { justify-content: center; font-size: 18px; }
+.badge.dataset { background: #6aa8ff; color: #04122a; }
+#scene-list { padding-left: 18px; margin: 0; }
+#scene-list a { color: var(--text); }
+#scene-list a[aria-current] { color: var(--accent); }
+
+#layers {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(10px);
+}
+#layers button { background: transparent; border: 1px solid transparent; border-radius: 9px; padding: 6px 14px; cursor: pointer; font-size: 13.5px; }
+#layers .seg button.on { background: #6aa8ff; color: #04122a; font-weight: 700; }
+#layer-label { font-size: 12px; color: var(--muted); padding: 0 6px 2px; font-variant-numeric: tabular-nums; }
+
+#minimap {
+  position: fixed; right: 16px; bottom: 16px; width: 30vmin; height: 30vmin; pointer-events: none;
+  border: 1px solid rgba(255,255,255,.28); border-radius: 6px; box-shadow: 0 0 0 4px rgba(11,13,18,.55);
+}
+#minimap span { position: absolute; top: 6px; left: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: .14em; color: var(--accent); text-shadow: 0 1px 2px #000; }
+
+#hud { position: fixed; left: 16px; bottom: 16px; display: flex; gap: 12px; align-items: flex-end; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; pointer-events: none; }
+#hud .kb { display: grid; grid-template-columns: repeat(3, 38px); gap: 5px; }
+#hud .kb span { height: 36px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.22); border-bottom-width: 3px; border-radius: 7px; font-weight: 700; font-size: 14px; color: var(--muted); background: rgba(0,0,0,.3); }
+#hud .kb span.wide { grid-column: 1 / 4; }
+#hud .kb span.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); transform: translateY(1px); }
+#hud .mouse { width: 40px; height: 60px; }
+#hud .mouse .body { fill: rgba(0,0,0,.3); stroke: rgba(255,255,255,.35); stroke-width: 2; }
+#hud .mouse .seam { stroke: rgba(255,255,255,.35); stroke-width: 1.5; fill: none; }
+#hud .mouse .lb, #hud .mouse .rb { fill: transparent; }
+#hud .mouse .wh { fill: rgba(255,255,255,.35); }
+#hud.lmb .mouse .lb, #hud.rmb .mouse .rb { fill: var(--accent); }
+#hud.wheel .mouse .wh { fill: var(--accent); }

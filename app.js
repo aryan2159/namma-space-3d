@@ -12,9 +12,10 @@ const $ = (id) => document.getElementById(id);
 const V3 = THREE.Vector3;
 const isTouch = matchMedia('(pointer: coarse)').matches;
 
-// Phone assumed ~1.35 m above the floor while filming: fixes the arbitrary SfM scale.
-const CAPTURE_HEIGHT_M = 1.35;
+// Camera assumed ~1.35 m above the floor while filming (per-scene override): fixes the arbitrary SfM scale.
+let CAPTURE_HEIGHT_M = 1.35;
 const EYE_M = 1.55;
+const params = new URLSearchParams(location.search);
 const RADIUS_M = 0.28;
 
 // ---------- renderer / scene ----------
@@ -35,13 +36,15 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.screenSpacePanning = true;
+controls.zoomToCursor = true; // wheel zooms toward the point under the mouse, for inspecting details
 
 const cutPlane = new THREE.Plane(new V3(0, -1, 0), 1e6);
 const raycaster = new THREE.Raycaster();
 raycaster.firstHitOnly = true;
 
-const state = { mode: 'orbit', cut: true, showPath: false, collide: true };
+const state = { mode: 'orbit', cut: true, showPath: false, collide: true, layer: 'textured', map: true };
 let room = null;
+let sceneCfg = null;
 
 // ---------- loading ----------
 async function getJSON(url) {
@@ -52,15 +55,20 @@ async function getJSON(url) {
 
 async function boot() {
   const cfg = await getJSON('scenes.json');
-  const want = new URLSearchParams(location.search).get('scene');
+  const want = params.get('scene');
   const sc = cfg.scenes.find((s) => s.id === want) || cfg.scenes[0];
-  document.title = `Namma Space · ${sc.title}`;
+  sceneCfg = sc;
+  if (sc.captureHeight) CAPTURE_HEIGHT_M = sc.captureHeight;
+  document.title = `NammaSpace · ${sc.title}`;
   $('scene-title').textContent = sc.title;
   $('scene-sub').textContent = sc.subtitle || '';
   const badge = $('scene-badge');
-  badge.textContent = sc.kind === 'real' ? 'REAL CAPTURE' : 'PUBLIC SAMPLE – not my room';
-  badge.className = `badge ${sc.kind === 'real' ? 'real' : 'sample'}`;
+  badge.textContent = { real: 'REAL CAPTURE', dataset: 'PUBLIC DATASET · PROTOTYPE' }[sc.kind] || 'PUBLIC SAMPLE';
+  badge.className = `badge ${sc.kind === 'real' ? 'real' : sc.kind === 'dataset' ? 'dataset' : 'sample'}`;
   $('info-provenance').textContent = sc.provenance || '';
+  if (sc.pipeline) $('pipe-list').innerHTML = sc.pipeline.map((s) => `<li>${s}</li>`).join('');
+  $('scene-list').innerHTML = cfg.scenes.map((s) =>
+    `<li><a href="?scene=${s.id}"${s.id === sc.id ? ' aria-current="page"' : ''}>${s.title}</a></li>`).join('');
 
   const [cams, stats] = await Promise.all([
     getJSON(sc.dir + 'cameras.json').catch(() => ({ cameras: [] })),
@@ -82,8 +90,73 @@ async function boot() {
   fillStats(stats, room);
   setMode('orbit');
   resetView();
+  buildMinimap();
   $('loader').classList.add('done');
   if (sc.splat) loadSplat(sc.dir + 'room.splat');
+  if (sc.stages) await loadStages(sc.dir);
+  window.__nsReady = true;
+}
+
+// ---------- pipeline stages: sparse SfM points, dense MVS points, untextured mesh, textured mesh ----------
+async function loadPly(url) {
+  // Compact binary PLY written by export_points.mjs: float x,y,z + uchar r,g,b per vertex.
+  const buf = await (await fetch(url)).arrayBuffer();
+  const head = new TextDecoder().decode(new Uint8Array(buf, 0, 400));
+  const n = Number(head.match(/element vertex (\d+)/)[1]);
+  const off = head.indexOf('end_header\n') + 11;
+  const dv = new DataView(buf, off);
+  const pos = new Float32Array(n * 3), col = new Uint8Array(n * 3);
+  for (let i = 0, o = 0; i < n; i++, o += 15) {
+    pos[i * 3] = dv.getFloat32(o, true); pos[i * 3 + 1] = dv.getFloat32(o + 4, true); pos[i * 3 + 2] = dv.getFloat32(o + 8, true);
+    col[i * 3] = dv.getUint8(o + 12); col[i * 3 + 1] = dv.getUint8(o + 13); col[i * 3 + 2] = dv.getUint8(o + 14);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+  return g;
+}
+async function loadStages(dir) {
+  const [sparse, dense] = await Promise.all([loadPly(dir + 'sparse.ply'), loadPly(dir + 'dense.ply')]);
+  const mk = (g, size) => {
+    const p = new THREE.Points(g, new THREE.PointsMaterial({ size, vertexColors: true, clippingPlanes: [cutPlane] }));
+    p.visible = false;
+    p.frustumCulled = false;
+    room.holder.add(p);
+    return p;
+  };
+  room.sparse = mk(sparse, 0.035);
+  room.dense = mk(dense, 0.018);
+  room.counts = { sparse: sparse.attributes.position.count, dense: dense.attributes.position.count };
+  scene.add(new THREE.HemisphereLight(0xf4f1ea, 0x3a3f4a, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  sun.position.set(3, 8, 5);
+  scene.add(sun);
+  room.meshes.forEach((m) => {
+    m.geometry.computeVertexNormals();
+    m.userData.tex = m.material;
+    m.userData.clay = new THREE.MeshStandardMaterial({ color: 0xc9c4ba, roughness: 0.85, metalness: 0, side: THREE.DoubleSide, clippingPlanes: [cutPlane] });
+  });
+  $('layers').hidden = false;
+}
+function setLayer(layer) {
+  if (!room || !room.dense) return;
+  state.layer = layer;
+  const pts = layer === 'sparse' || layer === 'dense';
+  room.meshes.forEach((m) => {
+    m.visible = !pts && !state.splat;
+    m.material = layer === 'mesh' ? m.userData.clay : m.userData.tex;
+  });
+  room.sparse.visible = layer === 'sparse';
+  room.dense.visible = layer === 'dense';
+  room.path.visible = state.showPath || layer === 'sparse';
+  document.querySelectorAll('#layers button').forEach((b) => b.classList.toggle('on', b.dataset.layer === layer));
+  const label = {
+    sparse: `Sparse SfM points · ${room.counts.sparse.toLocaleString('en-IN')} pts + camera poses`,
+    dense: `Dense MVS point cloud · ${room.counts.dense.toLocaleString('en-IN')} pts shown`,
+    mesh: `Surface mesh · ${Math.round(room.tris).toLocaleString('en-IN')} triangles`,
+    textured: 'Textured mesh · final digital twin',
+  }[layer];
+  $('layer-label').textContent = label;
 }
 
 // ---------- optional photoreal layer: Gaussian splats trained on the same SfM poses ----------
@@ -234,6 +307,57 @@ function buildPathHelper(poses) {
   return g;
 }
 
+// ---------- minimap: top-down orthographic view of the cut-away model with a "you are here" marker ----------
+const mapCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+mapCam.layers.enable(1);
+let marker = null;
+function buildMinimap() {
+  const e = room.ext;
+  const cx = (e.x0 + e.x1) / 2, cz = (e.z0 + e.z1) / 2;
+  const half = (Math.max(e.x1 - e.x0, e.z1 - e.z0) / 2) * 1.1;
+  Object.assign(mapCam, { left: -half, right: half, top: half, bottom: -half });
+  mapCam.position.set(cx, 60, cz);
+  mapCam.up.set(0, 0, -1);
+  mapCam.lookAt(cx, 0, cz);
+  mapCam.updateProjectionMatrix();
+  const r = half * 0.06;
+  const mat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, side: THREE.DoubleSide });
+  const flat = new THREE.Group();
+  flat.rotation.x = -Math.PI / 2; // shape +Y -> world -Z (walk forward at yaw 0)
+  const fov = THREE.MathUtils.degToRad(80);
+  flat.add(new THREE.Mesh(new THREE.CircleGeometry(r * 4.5, 24, Math.PI / 2 - fov / 2, fov), mat(0xffb547, 0.28)));
+  flat.add(new THREE.Mesh(new THREE.CircleGeometry(r * 1.25, 24), mat(0x0b0d12, 0.9)));
+  flat.add(new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape([
+    new THREE.Vector2(0, r * 1.1), new THREE.Vector2(r * 0.75, -r * 0.8), new THREE.Vector2(0, -r * 0.35), new THREE.Vector2(-r * 0.75, -r * 0.8)])), mat(0xffb547, 1)));
+  marker = new THREE.Group();
+  marker.add(flat);
+  marker.renderOrder = 10;
+  marker.traverse((o) => { o.layers.set(1); o.renderOrder = 10; });
+  scene.add(marker);
+}
+function mapRect() {
+  const size = Math.round(Math.min(innerWidth, innerHeight) * 0.3);
+  return { size, x: innerWidth - size - 16, y: 16 };
+}
+function renderMinimap() {
+  const show = room && marker && state.map && state.mode !== 'orbit';
+  $('minimap').hidden = !show;
+  if (!show) return;
+  marker.position.set(camera.position.x, room.height + 2, camera.position.z);
+  const f = new V3(0, 0, -1).applyQuaternion(camera.quaternion);
+  marker.rotation.y = Math.atan2(-f.x, -f.z);
+  const { size, x, y } = mapRect();
+  const c0 = cutPlane.constant;
+  cutPlane.constant = Math.min(room.height * 0.8, 2.1);
+  renderer.setScissorTest(true);
+  renderer.setScissor(x, y, size, size);
+  renderer.setViewport(x, y, size, size);
+  renderer.render(scene, mapCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+  cutPlane.constant = c0;
+}
+
 // ---------- tour along the real (smoothed) SfM trajectory ----------
 function buildTour(poses) {
   if (poses.length < 4) return null;
@@ -318,7 +442,7 @@ function setMode(mode) {
   if (mode === 'tour' && !room.tour) mode = 'orbit';
   const prev = state.mode;
   state.mode = mode;
-  document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+  document.querySelectorAll('.seg button[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
   controls.enabled = mode === 'orbit';
   $('tourbar').hidden = mode !== 'tour';
   $('joy').hidden = $('updown').hidden = !(mode === 'walk' && isTouch);
@@ -353,7 +477,7 @@ function overviewPose() {
   const back = new V3(-target.x, 0, -target.z);
   if (back.lengthSq() < 0.25) back.set(0.6, 0, 0.8);
   back.normalize();
-  const d = Math.hypot(e.x1 - e.x0, e.z1 - e.z0) * 0.75 + 2;
+  const d = Math.hypot(e.x1 - e.x0, e.z1 - e.z0) * 0.52 + 1.5;
   const pos = target.clone().addScaledVector(back, d * 0.75).add(new V3(0, room.height + d * 0.55, 0));
   return { target, pos };
 }
@@ -382,7 +506,7 @@ function updateHint() {
       : '<b>Drag</b> orbit · <b>wheel</b> zoom · <b>right-drag</b> pan · <b>double-click</b> focus · switch to <b>Walk</b> to roam inside',
     walk: isTouch ? '<b>Joystick</b> move · <b>drag</b> look · <b>pinch</b> zoom · <b>▲▼</b> height · <b>double-tap</b> floor to step there'
       : '<b>W A S D</b> move · <b>drag</b> look · <b>Shift</b> run · <b>Q/E</b> down/up · <b>wheel</b> zoom · <b>double-click</b> to step · <b>G</b> collision ' + (state.collide ? 'on' : 'off'),
-    tour: 'Replaying the <b>real smartphone trajectory</b> recovered by Structure-from-Motion',
+    tour: 'Replaying the <b>real camera trajectory</b> recovered by Structure-from-Motion',
   };
   h.innerHTML = t[state.mode];
   // On small screens the hint covers the view: show it briefly per mode.
@@ -489,9 +613,24 @@ addEventListener('keydown', (e) => {
   else if (e.code === 'KeyI' || e.code === 'KeyH') toggleInfo();
   else if (e.code === 'KeyG') { state.collide = !state.collide; updateHint(); }
   else if (e.code === 'KeyV') toggleSplat();
+  else if (e.code === 'KeyM') { state.map = !state.map; }
+  else if (e.code === 'KeyK') $('hud').hidden = !$('hud').hidden;
 });
 addEventListener('keyup', (e) => walk.keys.delete(e.code));
 addEventListener('blur', () => walk.keys.clear());
+
+// Input overlay (K or ?hud=1): shows the keys and mouse buttons in use, for demos and screen recordings.
+const hud = { wheelUntil: 0 };
+if (params.get('hud') === '1') $('hud').hidden = false;
+const hudKey = (code, on) => {
+  const k = code.startsWith('Shift') ? 'Shift' : code;
+  document.querySelectorAll(`#hud [data-k="${k}"]`).forEach((el) => el.classList.toggle('on', on));
+};
+addEventListener('keydown', (e) => hudKey(e.code, true));
+addEventListener('keyup', (e) => hudKey(e.code, false));
+addEventListener('pointerdown', (e) => $('hud').classList.add(e.button === 2 ? 'rmb' : 'lmb'));
+addEventListener('pointerup', () => $('hud').classList.remove('lmb', 'rmb'));
+addEventListener('wheel', () => { hud.wheelUntil = performance.now() + 250; }, { passive: true });
 
 // Virtual joystick + height buttons (touch, walk mode).
 const joy = $('joy'), knob = $('joy-knob');
@@ -515,7 +654,11 @@ for (const [id, v] of [['btn-up', 1], ['btn-down', -1]]) {
 }
 
 // Toolbar.
-document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+document.querySelectorAll('.seg button[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+document.querySelectorAll('#layers button').forEach((b) => b.addEventListener('click', () => setLayer(b.dataset.layer)));
+document.addEventListener('fullscreenchange', () => $('btn-full').classList.toggle('on', !!document.fullscreenElement));
+// Read-only handle for automated checks and the demo recorder (which drives the viewer through real input events).
+window.__ns = { THREE, state, walk, camera, controls, get room() { return room; } };
 $('btn-reset').onclick = resetView;
 $('btn-cut').onclick = toggleCut;
 $('btn-path').onclick = togglePath;
@@ -545,9 +688,11 @@ function fillStats(st, r) {
   const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-IN'));
   const mb = (b) => (b ? (b / 1048576).toFixed(1) + ' MB' : '—');
   const ext = `${(r.ext.x1 - r.ext.x0).toFixed(1)} × ${(r.ext.z1 - r.ext.z0).toFixed(1)} × ${r.height.toFixed(1)} m`;
+  const video = sceneCfg?.kind === 'real';
   const rows = [
-    ['Video frames used', fmt(st.frames_used)],
-    ['Frames registered by SfM', fmt(st.registered_images)],
+    [video ? 'Video frames used' : 'Input photographs', fmt(st.frames_used)],
+    [video ? 'Frames registered by SfM' : 'Images with camera poses', fmt(st.registered_images)],
+    ...(st.dense_points ? [['Dense MVS points', fmt(st.dense_points)]] : []),
     ['Sparse 3D points', fmt(st.sparse_points)],
     ['Mean reprojection error', st.mean_reproj_error_px != null ? st.mean_reproj_error_px.toFixed(2) + ' px' : '—'],
     ['Dense point cloud (PLY)', mb(st.dense_ply_bytes)],
@@ -585,6 +730,8 @@ renderer.setAnimationLoop(() => {
     }
   }
   renderer.render(scene, camera);
+  renderMinimap();
+  $('hud').classList.toggle('wheel', performance.now() < hud.wheelUntil);
 });
 
 addEventListener('resize', () => {
